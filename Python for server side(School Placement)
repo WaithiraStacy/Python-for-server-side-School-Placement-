@@ -1,0 +1,87 @@
+from flask import Flask, request, jsonify
+import mysql.connector
+import requests
+
+app = Flask(__name__)
+
+def create_database():
+    conn = mysql.connector.connect(
+        host='localhost',
+        user='your_user',
+        password='your_password',
+        database='placement_db'
+    )
+    cursor = conn.cursor()
+    cursor.execute('''CREATE TABLE IF NOT EXISTS candidates (
+                        id INT AUTO_INCREMENT PRIMARY KEY,
+                        score INT,
+                        gender VARCHAR(10),
+                        age INT,
+                        special_needs VARCHAR(3),
+                        city VARCHAR(100),
+                        placement VARCHAR(255)
+                    )''')
+    conn.commit()
+    conn.close()
+
+def get_nearby_schools(city):
+    """
+    Fetches school locations using OpenStreetMap's Nominatim API.
+    """
+    api_url = f"https://nominatim.openstreetmap.org/search?format=json&q=school+in+{city}"
+    
+    try:
+        response = requests.get(api_url)
+        if response.status_code == 200:
+            schools = response.json()
+            return [school["display_name"] for school in schools[:5]]  # Return top 5 schools
+        else:
+            return ["No schools found"]
+    except Exception as e:
+        return [f"Error fetching schools: {str(e)}"]
+
+@app.route('/submit', methods=['POST'])
+def determine_placement():
+    data = request.json
+    score = data.get('score')
+    gender = data.get('gender')
+    age = data.get('age')
+    special_needs = data.get('specialNeeds')
+    city = data.get('city')  # New input: Candidate’s city
+
+    if not (12 <= age <= 18):
+        return jsonify({"error": "Invalid age! Candidates must be between 12 and 18 years old."}), 400
+    
+    if score >= 400:
+        placement = f"National School ({gender}'s School)"
+    elif score >= 350:
+        placement = f"Extra County School ({gender}'s School)"
+    elif score >= 250:
+        placement = f"Special School ({gender}'s Special School)" if special_needs == "Yes" else f"County School ({gender}'s School)"
+    else:
+        placement = "Alternative Options: Vocational Training or Retake the Exam"
+
+    # Store data in MySQL
+    conn = mysql.connector.connect(
+        host='localhost',
+        user='your_user',
+        password='your_password',
+        database='placement_db'
+    )
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO candidates (score, gender, age, special_needs, city, placement) VALUES (%s, %s, %s, %s, %s, %s)",
+                   (score, gender, age, special_needs, city, placement))
+    conn.commit()
+    conn.close()
+    
+    # Fetch nearby schools using the external API
+    nearby_schools = get_nearby_schools(city)
+    
+    return jsonify({
+        "placement": placement,
+        "nearby_schools": nearby_schools
+    })
+
+if __name__ == '__main__':
+    create_database()
+    app.run(debug=True)
